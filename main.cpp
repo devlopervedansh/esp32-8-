@@ -1,99 +1,154 @@
 #include <Arduino.h>
 
-int buttonPin = 13;
-int whiteLED = 14;
-int redLED = 33;
-int greenLED = 32;
+int leds[] = {14, 32, 33, 13, 27};
+int numLeds = 5;
 
-bool gameActive = false;
-bool whiteOn = false;
-bool buttonPressed = false;
+unsigned long nowTime = 0;
+unsigned long lastTick = 0;
 
-unsigned long waitTime;
-unsigned long whiteOnTime;
-unsigned long reactionTimeLimit = 250;
+int globalSpeed = 5;
+bool invertOutputs = false;
 
-void startGame();
-void showSuccess();
-void showFail();
+unsigned long patternStart = 0;
+int currentPattern = 0;
+int totalPatterns = 24;
+
+unsigned long patternDurations[] = {
+  3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000,
+  3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000,
+  3000, 3000, 3000, 3000, 3000, 3000, 3000, 3000
+};
+
+int seedPin = 35;
+
+void setupPins() {
+  for (int i = 0; i < numLeds; i++) {
+    pinMode(leds[i], OUTPUT);
+    digitalWrite(leds[i], LOW);
+  }
+}
+
+void setLed(int idx, bool state) {
+  if (idx < 0 || idx >= numLeds) return;
+  if (invertOutputs) state = !state;
+  digitalWrite(leds[idx], state ? HIGH : LOW);
+}
+
+void setAll(bool state) {
+  for (int i = 0; i < numLeds; i++) setLed(i, state);
+}
+
+void patternOneByOneForward(unsigned long msPerLed) {
+  static int i = 0;
+  static unsigned long last = 0;
+  if (nowTime - last >= msPerLed) {
+    last = nowTime;
+    setAll(false);
+    setLed(i, true);
+    i = (i + 1) % numLeds;
+  }
+}
+
+void patternOneByOneBackward(unsigned long msPerLed) {
+  static int i = numLeds - 1;
+  static unsigned long last = 0;
+  if (nowTime - last >= msPerLed) {
+    last = nowTime;
+    setAll(false);
+    setLed(i, true);
+    i = (i - 1 + numLeds) % numLeds;
+  }
+}
+
+void patternBounce(unsigned long msPerLed) {
+  static int i = 0, dir = 1;
+  static unsigned long last = 0;
+  if (nowTime - last >= msPerLed) {
+    last = nowTime;
+    setAll(false);
+    setLed(i, true);
+    i += dir;
+    if (i >= numLeds) { i = numLeds - 2; dir = -1; }
+    if (i < 0) { i = 1; dir = 1; }
+  }
+}
+
+void patternAllBlink(unsigned long msOn, unsigned long msOff) {
+  static bool on = false;
+  static unsigned long last = 0;
+  if (on) {
+    if (nowTime - last >= msOn) { last = nowTime; on = false; setAll(false); }
+  } else {
+    if (nowTime - last >= msOff) { last = nowTime; on = true; setAll(true); }
+  }
+}
+
+void patternTwoAtATimeSlide(unsigned long msPerStep) {
+  static int i = 0;
+  static unsigned long last = 0;
+  if (nowTime - last >= msPerStep) {
+    last = nowTime;
+    setAll(false);
+    setLed(i, true);
+    setLed((i + 1) % numLeds, true);
+    i = (i + 1) % numLeds;
+  }
+}
+
+void patternRandomPulse(unsigned long msPerFlash) {
+  static unsigned long last = 0;
+  if (nowTime - last >= msPerFlash) {
+    last = nowTime;
+    setAll(false);
+    setLed(random(0, numLeds), true);
+  }
+}
+
+void patternKnightRider(unsigned long msPerStep) {
+  static int i = 0, dir = 1;
+  static unsigned long last = 0;
+  if (nowTime - last >= msPerStep) {
+    last = nowTime;
+    setAll(false);
+    setLed(i, true);
+    i += dir;
+    if (i >= numLeds) { i = numLeds - 2; dir = -1; }
+    if (i < 0) { i = 1; dir = 1; }
+  }
+}
+
+void runPatternByIndex(int idx) {
+  int speed = 40;
+  switch (idx) {
+    case 0: patternOneByOneForward(speed); break;
+    case 1: patternOneByOneBackward(speed); break;
+    case 2: patternBounce(speed); break;
+    case 3: patternAllBlink(60, 60); break;
+    case 4: patternTwoAtATimeSlide(speed); break;
+    case 5: patternRandomPulse(50); break;
+    case 6: patternKnightRider(speed); break;
+    default: patternRandomPulse(40); break;
+  }
+}
+
+void advancePatternIfNeeded() {
+  if (nowTime - patternStart >= patternDurations[currentPattern]) {
+    currentPattern = (currentPattern + 1) % totalPatterns;
+    patternStart = nowTime;
+  }
+}
 
 void setup() {
-  pinMode(whiteLED, OUTPUT);
-  pinMode(redLED, OUTPUT);
-  pinMode(greenLED, OUTPUT);
-  pinMode(buttonPin, INPUT_PULLUP);
-
   Serial.begin(115200);
-  delay(1000);
-  randomSeed(analogRead(0));
-
-  Serial.println("Setup done ✅");
-  startGame();
+  setupPins();
+  pinMode(seedPin, INPUT);
+  randomSeed(analogRead(seedPin));
+  setAll(false);
+  patternStart = millis();
 }
 
 void loop() {
-  int buttonState = digitalRead(buttonPin);
-
-  // Turn on white LED after the random wait
-  if (!whiteOn && millis() >= whiteOnTime) {
-    whiteOn = true;
-    digitalWrite(whiteLED, HIGH);
-    Serial.println("⚪️ White ON — Press any time now");
-  }
-
-  // Handle button press
-  if (whiteOn && !buttonPressed && buttonState == LOW) {
-    buttonPressed = true;
-
-    unsigned long reactionTime = millis() - whiteOnTime;
-
-    if (reactionTime <= reactionTimeLimit) {
-      Serial.print("🟢 Pressed in ");
-      Serial.print(reactionTime);
-      Serial.println(" ms ✅");
-      showSuccess();
-    } else {
-      Serial.print("🔴 Pressed too late (");
-      Serial.print(reactionTime);
-      Serial.println(" ms) ❌");
-      showFail();
-    }
-
-    delay(2000);
-    startGame();
-  }
-}
-
-void startGame() {
-  Serial.println("\n-----------------------------");
-  Serial.println("New Round 🎮");
-
-  digitalWrite(whiteLED, LOW);
-  digitalWrite(redLED, LOW);
-  digitalWrite(greenLED, LOW);
-
-  waitTime = random(2000, 5000);  // wait before turning on white
-  whiteOnTime = millis() + waitTime;
-
-  whiteOn = false;
-  buttonPressed = false;
-  gameActive = true;
-
-  Serial.print("⏳ Waiting ");
-  Serial.print(waitTime);
-  Serial.println("ms before white LED");
-}
-
-void showSuccess() {
-  digitalWrite(whiteLED, LOW);
-  digitalWrite(greenLED, HIGH);
-  digitalWrite(redLED, LOW);
-  Serial.println("✅ SUCCESS: Green ON");
-}
-
-void showFail() {
-  digitalWrite(whiteLED, LOW);
-  digitalWrite(greenLED, LOW);
-  digitalWrite(redLED, HIGH);
-  Serial.println("❌ FAIL: Red ON");
+  nowTime = millis();
+  runPatternByIndex(currentPattern);
+  advancePatternIfNeeded();
 }
